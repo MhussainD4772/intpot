@@ -12,7 +12,9 @@ if TYPE_CHECKING:
 
 def build_typer_app(name: str, tools: list[RegisteredTool]) -> _typer.Typer:
     """Construct a Typer CLI app from registered tools."""
+    import asyncio
     import functools
+    import inspect
 
     import typer
 
@@ -25,6 +27,8 @@ def build_typer_app(name: str, tools: list[RegisteredTool]) -> _typer.Typer:
         @functools.wraps(fn)
         def _cli_wrapper(*args: object, _fn: object = fn, **kwargs: object) -> None:
             result = _fn(*args, **kwargs)  # type: ignore[operator]
+            if inspect.iscoroutine(result):
+                result = asyncio.run(result)
             if result is not None:
                 typer.echo(result)
 
