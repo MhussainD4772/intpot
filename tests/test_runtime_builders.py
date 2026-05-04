@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typer.testing import CliRunner
+
 from intpot.runtime import App, RegisteredTool
 
 
@@ -57,3 +59,20 @@ def test_build_fastmcp_app():
 
     # FastMCP stores tools internally — check the name
     assert mcp_app.name == "test"
+
+
+def test_build_typer_app_runs_async_tool():
+    from intpot.runtime_builders import build_typer_app
+
+    app = App("async-app")
+
+    @app.tool()
+    async def greet(name: str) -> str:
+        return f"Hello, {name}!"
+
+    cli_app = build_typer_app("test", app._tools)
+
+    result = CliRunner().invoke(cli_app, ["World"])
+
+    assert result.exit_code == 0
+    assert "Hello, World!" in result.output
