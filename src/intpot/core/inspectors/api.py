@@ -7,13 +7,15 @@ import inspect
 import re
 from typing import Any
 
+import fastapi
+
 from intpot.core.inspectors._utils import (
     extract_function_body,
     extract_source_imports,
     python_type_name,
 )
 from intpot.core.inspectors.base import BaseInspector
-from intpot.core.models import _SENTINEL, ParameterInfo, ToolInfo
+from intpot.core.models import _SENTINEL,ParamSource, ParameterInfo, ToolInfo
 
 _INTERNAL_ROUTES = {
     "openapi",
@@ -36,6 +38,24 @@ def _is_depends(obj: Any) -> bool:
     cls_name = type(obj).__name__
     module = type(obj).__module__ or ""
     return cls_name == "Depends" and "fastapi" in module
+
+# Updated to pass down the param source
+def _get_param_source(obj: Any) -> ParamSource | None:
+    """Detect if a default is Query(), Header(), Body(), or Path()."""
+    cls_name = type(obj).__name__
+    module = getattr(type(obj), "__module__", "") or ""
+
+    if "fastapi" not in module:
+        return None
+
+    mapping = {
+        "Query": ParamSource.query,
+        "Header": ParamSource.header,
+        "Body": ParamSource.body,
+        "Path": ParamSource.path,
+    }
+    return mapping.get(cls_name)
+
 
 
 class APIInspector(BaseInspector):
@@ -113,12 +133,23 @@ class APIInspector(BaseInspector):
                 if param_name in path_params and not desc:
                     desc = f"Path parameter from {route_path}"
 
+
+                # Updated to detect param source
+                param_source = None
+                if param.default is not inspect.Parameter.empty:
+                    param_source = _get_param_source(param.default)
+
+                # Fall back to the path if name is in path params and no FastAPI annotation
+                if param_source is None and param_name in path_params:
+                    param_source = ParamSource.path
+
                 params.append(
                     ParameterInfo(
                         name=param_name,
                         type_annotation=type_str,
                         default=default,
                         description=desc,
+                        param_source=param_source,
                     )
                 )
 

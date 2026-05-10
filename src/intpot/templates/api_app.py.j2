@@ -2,7 +2,20 @@
 {% if typing_imports %}
 from typing import {{ typing_imports | join(", ") }}
 {%- endif %}
-from fastapi import FastAPI{% if tools | selectattr("parameters") | list %}, Body{% endif %}
+{%- set ns = namespace(imports=[]) %}
+{%- for tool in tools %}
+  {%- for param in tool.parameters %}
+    {%- if param.param_source %}
+      {%- set src = param.param_source.value | title %}
+      {%- if src not in ns.imports %}
+        {%- set ns.imports = ns.imports + [src] %}
+      {%- endif %}
+    {%- elif "Body" not in ns.imports %}
+      {%- set ns.imports = ns.imports + ["Body"] %}
+    {%- endif %}
+  {%- endfor %}
+{%- endfor %}
+from fastapi import FastAPI{% if ns.imports %}, {{ ns.imports | sort | join(", ") }}{% endif %}
 {%- if extra_imports %}
 {% for imp in extra_imports %}
 {{ imp }}
@@ -21,8 +34,9 @@ app = FastAPI()
 {%- if tool.parameters %}
 {%- for param in tool.parameters %}
     {{ param.name }}: {{ param.type_annotation }}
-{%- if not param.required %} = Body(default={{ param.default | repr }}{% if param.description %}, description="{{ param.description | escape_doc }}"{% endif %})
-{%- else %} = Body(...{% if param.description %}, description="{{ param.description | escape_doc }}"{% endif %})
+{%- set fa_type = param.param_source.value | title if param.param_source else "Body" %}
+{%- if not param.required %} = {{ fa_type }}(default={{ param.default | repr }}{% if param.description %}, description="{{ param.description | escape_doc }}"{% endif %})
+{%- else %} = {{ fa_type }}(...{% if param.description %}, description="{{ param.description | escape_doc }}"{% endif %})
 {%- endif %},
 {%- endfor %}
 {% endif -%}

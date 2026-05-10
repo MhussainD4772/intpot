@@ -52,3 +52,30 @@ def test_skips_internal_routes():
     assert "hello" in names
     assert "openapi" not in names
     assert "swagger_ui_html" not in names
+
+
+
+#Updated new test to test header and query param
+def test_query_and_header_param_sources():
+    from fastapi import Header, Query
+    from intpot.core.models import ParamSource
+
+    app = FastAPI()
+
+    @app.get("/search")
+    def search(
+        q: str = Query(..., description="Search term"),
+        limit: int = Query(10),
+        token: str = Header(...),
+    ) -> dict:
+        return {"q": q, "limit": limit}
+
+    inspector = APIInspector()
+    tools = inspector.inspect(app)
+
+    search_tool = next(t for t in tools if t.name == "search")
+    params = {p.name: p for p in search_tool.parameters}
+
+    assert params["q"].param_source == ParamSource.query
+    assert params["limit"].param_source == ParamSource.query
+    assert params["token"].param_source == ParamSource.header
