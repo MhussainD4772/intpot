@@ -7,15 +7,13 @@ import inspect
 import re
 from typing import Any
 
-import fastapi
-
 from intpot.core.inspectors._utils import (
     extract_function_body,
     extract_source_imports,
     python_type_name,
 )
 from intpot.core.inspectors.base import BaseInspector
-from intpot.core.models import _SENTINEL,ParamSource, ParameterInfo, ToolInfo
+from intpot.core.models import _SENTINEL, ParameterInfo, ParamSource, ToolInfo
 
 _INTERNAL_ROUTES = {
     "openapi",
@@ -39,6 +37,7 @@ def _is_depends(obj: Any) -> bool:
     module = type(obj).__module__ or ""
     return cls_name == "Depends" and "fastapi" in module
 
+
 # Updated to pass down the param source
 def _get_param_source(obj: Any) -> ParamSource | None:
     """Detect if a default is Query(), Header(), Body(), or Path()."""
@@ -55,7 +54,6 @@ def _get_param_source(obj: Any) -> ParamSource | None:
         "Path": ParamSource.path,
     }
     return mapping.get(cls_name)
-
 
 
 class APIInspector(BaseInspector):
@@ -132,7 +130,6 @@ class APIInspector(BaseInspector):
                 # Mark path parameters in description
                 if param_name in path_params and not desc:
                     desc = f"Path parameter from {route_path}"
-
 
                 # Updated to detect param source
                 param_source = None

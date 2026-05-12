@@ -54,10 +54,10 @@ def test_skips_internal_routes():
     assert "swagger_ui_html" not in names
 
 
-
-#Updated new test to test header and query param
+# Updated new test to test header and query param
 def test_query_and_header_param_sources():
     from fastapi import Header, Query
+
     from intpot.core.models import ParamSource
 
     app = FastAPI()
