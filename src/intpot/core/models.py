@@ -73,6 +73,7 @@ def sanitize_identifier(name: str) -> str:
         name = f"{name}_"
     return name
 
+
 # Adding a parameter source enum
 class ParamSource(str, Enum):
     body = "body"
@@ -80,13 +81,14 @@ class ParamSource(str, Enum):
     header = "header"
     path = "path"
 
+
 @dataclass
 class ParameterInfo:
     name: str
     type_annotation: str = "str"
     default: Any = _SENTINEL  # _SENTINEL means required (no default)
     description: str = ""
-    param_source: ParamSource | None = None # updated
+    param_source: ParamSource | None = None  # updated
 
     def __post_init__(self) -> None:
         self.name = sanitize_identifier(self.name)
