@@ -74,12 +74,21 @@ def sanitize_identifier(name: str) -> str:
     return name
 
 
-# Adding a parameter source enum
 class ParamSource(str, Enum):
     body = "body"
     query = "query"
     header = "header"
     path = "path"
+
+    @property
+    def fastapi_class(self) -> str:
+        """Return the exact FastAPI class name for this source."""
+        return {
+            ParamSource.body: "Body",
+            ParamSource.query: "Query",
+            ParamSource.header: "Header",
+            ParamSource.path: "Path",
+        }[self]
 
 
 @dataclass
@@ -88,7 +97,7 @@ class ParameterInfo:
     type_annotation: str = "str"
     default: Any = _SENTINEL  # _SENTINEL means required (no default)
     description: str = ""
-    param_source: ParamSource | None = None  # updated
+    param_source: ParamSource | None = None
 
     def __post_init__(self) -> None:
         self.name = sanitize_identifier(self.name)

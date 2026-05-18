@@ -54,7 +54,6 @@ def test_skips_internal_routes():
     assert "swagger_ui_html" not in names
 
 
-# Updated new test to test header and query param
 def test_query_and_header_param_sources():
     from fastapi import Header, Query
 
@@ -79,3 +78,87 @@ def test_query_and_header_param_sources():
     assert params["q"].param_source == ParamSource.query
     assert params["limit"].param_source == ParamSource.query
     assert params["token"].param_source == ParamSource.header
+
+
+def test_body_param_source():
+    from fastapi import Body
+
+    from intpot.core.models import ParamSource
+
+    app = FastAPI()
+
+    @app.post("/create")
+    def create(data: dict = Body(...)) -> dict:
+        return {"received": data}
+
+    inspector = APIInspector()
+    tools = inspector.inspect(app)
+
+    create_tool = next(t for t in tools if t.name == "create")
+    params = {p.name: p for p in create_tool.parameters}
+
+    assert params["data"].param_source == ParamSource.body
+
+
+def test_path_param_source_explicit():
+    from fastapi import Path
+
+    from intpot.core.models import ParamSource
+
+    app = FastAPI()
+
+    @app.get("/items/{item_id}")
+    def get_item(item_id: int = Path(...)) -> dict:
+        return {"id": item_id}
+
+    inspector = APIInspector()
+    tools = inspector.inspect(app)
+
+    get_item_tool = next(t for t in tools if t.name == "get_item")
+    params = {p.name: p for p in get_item_tool.parameters}
+
+    assert params["item_id"].param_source == ParamSource.path
+
+
+def test_path_param_source_implicit():
+    from intpot.core.models import ParamSource
+
+    app = FastAPI()
+
+    @app.get("/users/{user_id}")
+    def get_user(user_id: int) -> dict:
+        return {"id": user_id}
+
+    inspector = APIInspector()
+    tools = inspector.inspect(app)
+
+    get_user_tool = next(t for t in tools if t.name == "get_user")
+    params = {p.name: p for p in get_user_tool.parameters}
+
+    assert params["user_id"].param_source == ParamSource.path
+
+
+def test_generator_output_correct_fastapi_types():
+    from fastapi import Header, Query
+
+    from intpot.core.generators.api import APIGenerator
+
+    app = FastAPI()
+
+    @app.get("/search")
+    def search(
+        q: str = Query(...),
+        token: str = Header(...),
+    ) -> dict:
+        return {"q": q}
+
+    inspector = APIInspector()
+    tools = inspector.inspect(app)
+
+    generator = APIGenerator()
+    output = generator.generate(tools)
+
+    assert "Query" in output
+    assert "Header" in output
+    assert "q: str = Query(" in output
+    assert "token: str = Header(" in output
