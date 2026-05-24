@@ -38,7 +38,6 @@ def _is_depends(obj: Any) -> bool:
     return cls_name == "Depends" and "fastapi" in module
 
 
-# Updated to pass down the param source
 def _get_param_source(obj: Any) -> ParamSource | None:
     """Detect if a default is Query(), Header(), Body(), or Path()."""
     cls_name = type(obj).__name__
@@ -131,7 +130,6 @@ class APIInspector(BaseInspector):
                 if param_name in path_params and not desc:
                     desc = f"Path parameter from {route_path}"
 
-                # Updated to detect param source
                 param_source = None
                 if param.default is not inspect.Parameter.empty:
                     param_source = _get_param_source(param.default)
