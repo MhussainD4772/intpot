@@ -25,6 +25,23 @@ jobs:
       - run: uv sync --all-extras
       - run: uv run pyright src/ tests/
 
+  changelog:
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PR must touch a changelog fragment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh pr diff ${{ github.event.pull_request.number }} --name-only \
+             | grep -Eq '^changelog\.d/[0-9]+\.(added|changed|deprecated|removed|fixed)\.md$'; then
+            echo "changelog fragment found"
+            exit 0
+          fi
+          echo "::error::no changelog fragment in this PR — add changelog.d/${{ github.event.pull_request.number }}.<type>.md (see changelog.d/README.md), or apply the 'skip-changelog' label if this change isn't user-facing"
+          exit 1
+
   test:
     runs-on: ubuntu-latest
     strategy:
