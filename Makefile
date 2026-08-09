@@ -1,4 +1,4 @@
-.PHONY: install test lint format typecheck check build clean
+.PHONY: install test lint format typecheck check build clean changelog-draft changelog
 
 install:
 	uv sync --all-extras
@@ -19,6 +19,12 @@ typecheck:
 	uv run pyright src/ tests/
 
 check: lint typecheck test
+
+changelog-draft:
+	uv run towncrier build --draft --version $$(uv version --short)
+
+changelog:
+	uv run towncrier build --yes --version $$(uv version --short)
 
 build:
 	uv build
