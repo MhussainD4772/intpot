@@ -162,6 +162,47 @@ def test_fastapi_endpoint_calls_async_positional_only_parameters_positionally():
     assert response.json() == "hello world"
 
 
+def test_fastapi_endpoint_calls_bound_instance_method_with_positional_default():
+    from fastapi.testclient import TestClient
+
+    from intpot.runtime_builders import build_fastapi_app
+
+    class Tools:
+        def combine(self, left: str = "hello ", /, right: str = "world") -> str:
+            return left + right
+
+    app = App("bound-instance")
+    app.tool()(Tools().combine)
+
+    api_app: Any = build_fastapi_app("test", app._tools)
+    response = TestClient(api_app).post("/combine", json={})
+
+    assert response.status_code == 200
+    assert response.json() == "hello world"
+
+
+def test_fastapi_endpoint_calls_async_bound_class_method_positionally():
+    from fastapi.testclient import TestClient
+
+    from intpot.runtime_builders import build_fastapi_app
+
+    class Tools:
+        prefix = "bound:"
+
+        @classmethod
+        async def label(cls, value: str, /) -> str:
+            return cls.prefix + value
+
+    app = App("bound-class")
+    app.tool()(Tools.label)
+
+    api_app: Any = build_fastapi_app("test", app._tools)
+    response = TestClient(api_app).post("/label", json="value")
+
+    assert response.status_code == 200
+    assert response.json() == "bound:value"
+
+
 def test_serving_and_ejecting_expose_the_same_interface():
     """The invariant behind this whole builder: one app, one HTTP surface.
 
