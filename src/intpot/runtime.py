@@ -11,6 +11,7 @@ from typing import Any
 from intpot.core.inspectors._utils import (
     extract_function_body,
     extract_source_imports,
+    python_return_type_name,
     python_type_name,
 )
 from intpot.core.models import _SENTINEL, ParameterInfo, ToolInfo
@@ -205,12 +206,10 @@ def _build_tool_info(
             )
         )
 
-    # Return type
+    # Return type. `-> None` and "no annotation" are different answers, and
+    # collapsing both to "str" made every ejected FastAPI endpoint 500.
     return_hint = hints.get("return", sig.return_annotation)
-    if return_hint is inspect.Parameter.empty or return_hint is None:
-        return_type = "str"
-    else:
-        return_type = python_type_name(return_hint)
+    return_type = python_return_type_name(return_hint)
 
     # Extract function body and imports for eject
     function_body = extract_function_body(func)

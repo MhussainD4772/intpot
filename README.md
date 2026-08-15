@@ -44,8 +44,9 @@ pip install intpot[api]       # + FastAPI support
 pip install intpot[all]       # everything
 ```
 
-The extras are only needed for frameworks you actually touch: reading a FastMCP server
-or emitting one requires `[mcp]`, and the same goes for `[api]` and FastAPI.
+Install an extra when intpot must inspect/load a source using that framework or when you
+serve, import, or run that target. Emitting source text alone does not require the target
+extra, but verifying or executing the emitted program does.
 
 ## Quick Start
 
@@ -518,8 +519,9 @@ All three take the same arguments:
 `to cli` accepts MCP or API sources, `to mcp` accepts CLI or API, `to api` accepts CLI or
 MCP. A source that already matches the target is skipped.
 
-`--dry-run` is worth reaching for the first time you point intpot at unfamiliar code,
-since it shows the full output and touches nothing:
+`--dry-run` shows generated output without writing generated files, but it is not a
+sandbox: detection still imports the source and executes arbitrary module-level code.
+Only point intpot at source you trust:
 
 ```
 $ intpot to cli mcp_server.py --dry-run
@@ -549,9 +551,9 @@ intpot add skills [--agent <name>] [--path <dir>]
 | Claude Code | `.claude/` | `.claude/skills/intpot-cli/SKILL.md`, `.claude/skills/intpot-python/SKILL.md` |
 | Cursor | `.cursor/` | `.cursor/rules/intpot-cli.mdc`, `.cursor/rules/intpot-python.mdc` |
 | Windsurf | `.windsurf/` | `.windsurf/rules/intpot-cli.md`, `.windsurf/rules/intpot-python.md` |
-| GitHub Copilot | `.github/copilot-instructions.md` | `.github/copilot-instructions.md` (appended) |
+| GitHub Copilot | `.github/copilot-instructions.md` | `.github/copilot-instructions.md` (managed block) |
 | Cline | `.clinerules/` | `.clinerules/intpot-cli.md`, `.clinerules/intpot-python.md` |
-| OpenAI Codex | never auto-detected | `AGENTS.md` (appended) |
+| OpenAI Codex | never auto-detected | `AGENTS.md` (managed block) |
 
 **Codex has to be asked for by name** — `intpot add skills --agent codex`. It reads
 `AGENTS.md`, but so does nearly every other tool now, so the presence of that file says
@@ -561,6 +563,10 @@ edit your own documentation. The same reasoning is why Copilot keys off
 on GitHub.
 
 Running with no `--agent` and no detected marker exits without writing anything.
+Copilot and Codex installations use bounded intpot-managed blocks, so rerunning the
+command updates or repairs intpot guidance while preserving surrounding project content.
+For Codex, intpot warns when the resulting `AGENTS.md` exceeds Codex's default 32 KiB
+instruction limit.
 
 ## Development
 

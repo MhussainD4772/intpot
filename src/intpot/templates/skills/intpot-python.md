@@ -94,6 +94,16 @@ print(app.source_type)                    # SourceType.MCP / CLI / API
 Calling `to_cli()` on a source that is already a CLI raises `ValueError`; same for the
 other two.
 
+Generated strings still need runtime verification. Successful generation does not prove
+the result works: compile it, import it with its runtime dependencies installed, then
+invoke a real CLI command, API request, or MCP tool. intpot does not discover or install
+transitive dependencies, reproduce configuration, or provision external services.
+
+Current unsupported or lossy conversions include nested Typer sub-apps, some FastAPI
+`Annotated[..., Body(...)]` parameters, and `Depends()` when targeting CLI or MCP. A body
+that cannot be recovered becomes a `# TODO: implement` stub; inspect and implement it
+before treating the output as complete.
+
 ## Normalized tool data
 
 `.tools` returns `ToolInfo` objects — the schema both halves of intpot meet at.
@@ -131,5 +141,9 @@ tools = inspect_app(SourceType.MCP, mcp_instance)
 ## Installation
 
 ```bash
-pip install intpot[all]   # includes the fastmcp and fastapi extras
+pip install intpot[all]   # install both framework runtimes
 ```
+
+Install `[mcp]` or `[api]` when intpot must inspect or load a source using that framework,
+or when you import, serve, or invoke that target. Emitting source text alone does not
+require the target extra, but verifying or running the emitted program does.

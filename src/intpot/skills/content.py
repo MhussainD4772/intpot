@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "templates" / "skills"
@@ -35,15 +36,24 @@ def claude_skill(title: str, body: str, *, name: str, description: str) -> str:
     relevant. A file without frontmatter is never loaded, so the body alone --
     which is what this used to return -- was silently inert.
     """
-    return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
-
-
-def cursor_rule(title: str, body: str, globs: str = '["*.py"]') -> str:
-    """Format as a Cursor rule (.mdc in .cursor/rules/)."""
     return (
         f"---\n"
-        f"description: {title} — use intpot to convert between CLI, MCP, and API frameworks\n"
-        f"globs: {globs}\n"
+        f"name: {json.dumps(name)}\n"
+        f"description: {json.dumps(description)}\n"
+        f"---\n\n"
+        f"{body}"
+    )
+
+
+def cursor_rule(title: str, body: str) -> str:
+    """Format as an intelligently activated Cursor rule."""
+    description = (
+        f"Use the {title} when defining portable tools or converting, inspecting, "
+        "serving, or generating Typer CLI, FastAPI, and FastMCP applications."
+    )
+    return (
+        f"---\n"
+        f"description: {json.dumps(description)}\n"
         f"alwaysApply: false\n"
         f"---\n\n"
         f"{body}"
@@ -51,8 +61,18 @@ def cursor_rule(title: str, body: str, globs: str = '["*.py"]') -> str:
 
 
 def windsurf_rule(title: str, body: str) -> str:
-    """Format as a Windsurf rule (.md in .windsurf/rules/)."""
-    return body
+    """Format as a model-decision Windsurf rule."""
+    description = (
+        f"Use the {title} when defining portable tools or converting, inspecting, "
+        "serving, or generating Typer CLI, FastAPI, and FastMCP applications."
+    )
+    return (
+        f"---\n"
+        f"trigger: model_decision\n"
+        f"description: {json.dumps(description)}\n"
+        f"---\n\n"
+        f"{body}"
+    )
 
 
 def copilot_instruction(title: str, body: str) -> str:

@@ -51,10 +51,13 @@ def _target_return_type(tool: ToolInfo, source: SourceType, target: SourceType) 
         return "None"
     if target == SourceType.API:
         # FastAPI validates the response against this annotation, so it has to
-        # describe what the body actually returns. Every explicit return is
-        # wrapped into a dict above; a body with no return falls through to None.
-        if tool.function_body and not _has_top_level_return(tool.function_body):
+        # describe every reachable output. Explicit values are wrapped into a
+        # dict above; bare returns and normal fallthrough produce None.
+        outcomes = _return_outcomes(tool.function_body or "")
+        if "value" not in outcomes:
             return "None"
+        if outcomes & {"none", "fallthrough"}:
+            return "dict | None"
         return "dict"
     # MCP: preserve original if coming from MCP/API, use str from CLI
     if source == SourceType.CLI:
@@ -81,6 +84,32 @@ def _transform_body(body: str, source: SourceType, target: SourceType) -> str:
 # ---------------------------------------------------------------------------
 
 
+_ACCUMULATOR = "_intpot_output"
+
+
+def _echo_statements(tree: ast.AST) -> list[ast.Expr]:
+    """Every `typer.echo(...)` used as a statement, at any depth."""
+    checker = _TyperEchoToReturn()
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and checker._is_typer_echo(node.value)
+    ]
+
+
+def _returns_the_last_thing_it_prints(tree: ast.Module) -> bool:
+    """Whether turning `typer.echo` into `return` preserves what the body does.
+
+    Only when there is exactly one echo and it is the final top-level statement.
+    Anywhere else — inside a loop, a branch, or followed by more work — `return`
+    exits early and the rest never runs, which silently changes the answer.
+    """
+    echoes = _echo_statements(tree)
+    if len(echoes) != 1:
+        return False
+    return bool(tree.body) and tree.body[-1] is echoes[0]
+
+
 def _from_cli(body: str, target: SourceType) -> str:
     """Transform CLI body: typer.echo(X) → return X (MCP/API)."""
     try:
@@ -88,8 +117,11 @@ def _from_cli(body: str, target: SourceType) -> str:
     except SyntaxError:
         return body
 
-    transformer = _TyperEchoToReturn()
-    new_tree = transformer.visit(tree)
+    if _echo_statements(tree) and not _returns_the_last_thing_it_prints(tree):
+        new_tree = _accumulate_echoes(tree)
+    else:
+        transformer = _TyperEchoToReturn()
+        new_tree = transformer.visit(tree)
     ast.fix_missing_locations(new_tree)
 
     # Also remove typer.Exit raises → convert to return/raise
@@ -98,6 +130,70 @@ def _from_cli(body: str, target: SourceType) -> str:
     ast.fix_missing_locations(new_tree)
 
     return ast.unparse(new_tree)
+
+
+class _EchoToAccumulator(ast.NodeTransformer):
+    """Replace typer.echo(X) with an append, and bare `return` with the join.
+
+    A bare `return` in a CLI command means "stop here"; the output produced so
+    far still has to come back, so it becomes the joined accumulator.
+    """
+
+    def __init__(self) -> None:
+        self._checker = _TyperEchoToReturn()
+        self._depth = 0
+
+    def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        if not self._checker._is_typer_echo(node.value):
+            return node
+        call = node.value
+        assert isinstance(call, ast.Call)
+        value = call.args[0] if call.args else ast.Constant(value="")
+        appended = ast.parse(f"{_ACCUMULATOR}.append(None)").body[0]
+        assert isinstance(appended, ast.Expr)
+        assert isinstance(appended.value, ast.Call)
+        appended.value.args = [value]
+        return appended
+
+    def visit_Return(self, node: ast.Return) -> ast.AST:
+        # Only the converted function's own returns mean "hand back the output".
+        # A nested function's return belongs to that function.
+        if self._depth > 0 or node.value is not None:
+            return node
+        return _join_accumulator()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        # Descend anyway: an echo in a helper still has to stop being an echo,
+        # or it survives into a module that never imports typer. Appending from
+        # a nested scope needs no `nonlocal` — the list is only mutated.
+        self._depth += 1
+        self.generic_visit(node)
+        self._depth -= 1
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+
+def _join_accumulator() -> ast.stmt:
+    return ast.parse(f"return '\\n'.join(str(_item) for _item in {_ACCUMULATOR})").body[
+        0
+    ]
+
+
+def _accumulate_echoes(tree: ast.Module) -> ast.Module:
+    """Collect everything the body prints and return it, in order.
+
+    Rewriting each `typer.echo` into `return` independently was wrong the moment
+    there was more than one of them: an echo inside a loop returned on the first
+    iteration, so `for item in items: typer.echo(item)` yielded one item instead
+    of all of them, with no error.
+    """
+    transformed = _EchoToAccumulator().visit(tree)
+    prelude = ast.parse(f"{_ACCUMULATOR} = []").body[0]
+    body = [prelude, *transformed.body]
+    if not isinstance(body[-1], ast.Return):
+        body.append(_join_accumulator())
+    return ast.Module(body=body, type_ignores=[])
 
 
 class _TyperEchoToReturn(ast.NodeTransformer):
@@ -220,33 +316,114 @@ def _returns_to_echo(body: str) -> str:
     return ast.unparse(new_tree)
 
 
-class _TopLevelReturnVisitor(ast.NodeVisitor):
-    """Track whether a body returns at its own scope, ignoring nested defs."""
-
-    def __init__(self) -> None:
-        self.found = False
-        self._depth = 0
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._depth += 1
-        self.generic_visit(node)
-        self._depth -= 1
-
-    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
-
-    def visit_Return(self, node: ast.Return) -> None:
-        if self._depth == 0:
-            self.found = True
+_FALLTHROUGH = "fallthrough"
+_VALUE_RETURN = "value"
+_NONE_RETURN = "none"
+_TERMINATE = "terminate"
+_BREAK = "break"
 
 
-def _has_top_level_return(body: str) -> bool:
+def _then(
+    first: set[str],
+    second: set[str],
+) -> set[str]:
+    """Compose control-flow outcomes for two consecutive suites."""
+    outcomes = first - {_FALLTHROUGH}
+    if _FALLTHROUGH in first:
+        outcomes.update(second)
+    return outcomes
+
+
+def _suite_outcomes(statements: list[ast.stmt]) -> set[str]:
+    outcomes = {_FALLTHROUGH}
+    for statement in statements:
+        outcomes = _then(outcomes, _statement_outcomes(statement))
+    return outcomes
+
+
+def _statement_outcomes(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, ast.Return):
+        return {_NONE_RETURN if statement.value is None else _VALUE_RETURN}
+    if isinstance(statement, ast.Raise):
+        return {_TERMINATE}
+    if isinstance(statement, ast.Break):
+        return {_BREAK}
+    if isinstance(statement, ast.If):
+        otherwise = (
+            _suite_outcomes(statement.orelse) if statement.orelse else {_FALLTHROUGH}
+        )
+        return _suite_outcomes(statement.body) | otherwise
+    if isinstance(statement, ast.Match):
+        outcomes: set[str] = set()
+        exhaustive = False
+        for case in statement.cases:
+            outcomes.update(_suite_outcomes(case.body))
+            if (
+                case.guard is None
+                and isinstance(case.pattern, ast.MatchAs)
+                and case.pattern.pattern is None
+            ):
+                # Both ``case _:`` and an unguarded capture pattern match every
+                # remaining value, so control cannot miss every case.
+                exhaustive = True
+        if not exhaustive:
+            outcomes.add(_FALLTHROUGH)
+        return outcomes
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        body = _suite_outcomes(statement.body)
+        outcomes = body - {_FALLTHROUGH, _BREAK}
+
+        # A break skips the else suite and continues after the loop.
+        if _BREAK in body:
+            outcomes.add(_FALLTHROUGH)
+
+        # For-loops may be empty, and non-constant while conditions may be false.
+        # Normal exhaustion runs the else suite before continuing. A literal
+        # ``while True`` has no normal-exhaustion path.
+        is_infinite_while = (
+            isinstance(statement, ast.While)
+            and isinstance(statement.test, ast.Constant)
+            and statement.test.value is True
+        )
+        if not is_infinite_while:
+            outcomes.update(
+                _suite_outcomes(statement.orelse)
+                if statement.orelse
+                else {_FALLTHROUGH}
+            )
+        return outcomes
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        outcomes = _suite_outcomes(statement.body)
+        if _TERMINATE in outcomes:
+            # A context manager may suppress an exception raised by its body,
+            # in which case execution continues after the with statement.
+            outcomes.add(_FALLTHROUGH)
+        return outcomes
+    if isinstance(statement, (ast.Try, ast.TryStar)):
+        normal = _suite_outcomes(statement.body)
+        if statement.orelse:
+            normal = _then(normal, _suite_outcomes(statement.orelse))
+        outcomes = normal
+        for handler in statement.handlers:
+            outcomes |= _suite_outcomes(handler.body)
+        if statement.finalbody:
+            final = _suite_outcomes(statement.finalbody)
+            outcomes = (final - {_FALLTHROUGH}) | (
+                outcomes if _FALLTHROUGH in final else set()
+            )
+        return outcomes
+    # Nested definitions and ordinary statements complete normally. In
+    # particular, returns inside a nested function do not describe this body.
+    return {_FALLTHROUGH}
+
+
+def _return_outcomes(body: str) -> set[str]:
+    """Find reachable value, None, and fallthrough outcomes for a body."""
     try:
         tree = ast.parse(body)
     except SyntaxError:
-        return False
-    visitor = _TopLevelReturnVisitor()
-    visitor.visit(tree)
-    return visitor.found
+        return {_FALLTHROUGH}
+    return _suite_outcomes(tree.body)
 
 
 def _wrap_returns_in_dict(body: str) -> str:

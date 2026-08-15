@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from intpot.cli import app
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("target", ["cli", "mcp", "api"])
+def test_single_file_detection_failure_is_reported(target, tmp_source):
+    source = tmp_source("value = 42")
+
+    result = runner.invoke(app, ["to", target, str(source)])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "No FastMCP, Typer, or FastAPI app instance found" in result.stderr
+    assert str(source) in result.stderr
 
 
 def test_mcp_to_cli(tmp_source):
@@ -38,6 +51,24 @@ def test_api_to_cli(tmp_source):
     result = runner.invoke(app, ["to", "cli", str(source)])
     assert result.exit_code == 0
     assert "def add(" in result.output
+
+
+def test_single_file_output_creates_parent_directories(tmp_source, tmp_path):
+    source = tmp_source("""
+        from fastmcp import FastMCP
+        mcp = FastMCP("test")
+
+        @mcp.tool()
+        def greet(name: str) -> str:
+            return f"Hello, {name}!"
+    """)
+    output = tmp_path / "generated" / "nested" / "cli.py"
+
+    result = runner.invoke(app, ["to", "cli", str(source), "--output", str(output)])
+
+    assert result.exit_code == 0
+    assert output.is_file()
+    assert "def greet(" in output.read_text()
 
 
 def test_cli_to_cli_fails(tmp_source):
