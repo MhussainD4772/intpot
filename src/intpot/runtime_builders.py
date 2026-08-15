@@ -17,6 +17,58 @@ _HTTP_METHODS = frozenset(
 )
 
 
+def _restore_positional_only(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Expose positional-only parameters by name, then restore them on invocation."""
+    import functools
+    import inspect
+
+    signature = inspect.signature(func)
+    positional_only = tuple(
+        param.name
+        for param in signature.parameters.values()
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY
+    )
+    if not positional_only:
+        return func
+
+    def call_arguments(
+        args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        remaining = dict(kwargs)
+        restored = tuple(
+            remaining.pop(name) for name in positional_only if name in remaining
+        )
+        return args + restored, remaining
+
+    wrapper: Callable[..., Any]
+    if inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            restored, remaining = call_arguments(args, kwargs)
+            return await func(*restored, **remaining)
+
+        wrapper = _async_wrapper
+    else:
+
+        @functools.wraps(func)
+        def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            restored, remaining = call_arguments(args, kwargs)
+            return func(*restored, **remaining)
+
+        wrapper = _sync_wrapper
+
+    wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[
+            param.replace(kind=inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            if param.kind == inspect.Parameter.POSITIONAL_ONLY
+            else param
+            for param in signature.parameters.values()
+        ]
+    )
+    return wrapper
+
+
 def build_typer_app(name: str, tools: list[RegisteredTool]) -> _typer.Typer:
     """Construct a Typer CLI app from registered tools."""
     import asyncio
@@ -29,7 +81,7 @@ def build_typer_app(name: str, tools: list[RegisteredTool]) -> _typer.Typer:
     for tool in tools:
         # Wrap so return values are printed — plain functions return values,
         # but Typer commands need explicit output via typer.echo().
-        fn = tool.func
+        fn = _restore_positional_only(tool.func)
 
         @functools.wraps(fn)
         def _cli_wrapper(*args: object, _fn: object = fn, **kwargs: object) -> None:
@@ -74,6 +126,20 @@ def _fastapi_endpoint(func: Callable[..., Any], info: ToolInfo) -> Callable[...,
     variadic = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
 
     signature = inspect.signature(func)
+    positional_only = tuple(
+        param.name
+        for param in signature.parameters.values()
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY
+    )
+
+    def call_arguments(
+        kwargs: dict[str, Any],
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Restore the original callable's positional-only arguments."""
+        remaining = dict(kwargs)
+        args = tuple(remaining.pop(name) for name in positional_only)
+        return args, remaining
+
     parameters = []
     for param_name, param in signature.parameters.items():
         if param.kind in variadic:
@@ -101,14 +167,16 @@ def _fastapi_endpoint(func: Callable[..., Any], info: ToolInfo) -> Callable[...,
 
         @functools.wraps(func)
         async def _async_endpoint(**kwargs: Any) -> Any:
-            return await func(**kwargs)
+            args, remaining = call_arguments(kwargs)
+            return await func(*args, **remaining)
 
         endpoint = _async_endpoint
     else:
 
         @functools.wraps(func)
         def _sync_endpoint(**kwargs: Any) -> Any:
-            return func(**kwargs)
+            args, remaining = call_arguments(kwargs)
+            return func(*args, **remaining)
 
         endpoint = _sync_endpoint
 
@@ -156,5 +224,7 @@ def build_fastmcp_app(name: str, tools: list[RegisteredTool]) -> object:
 
     mcp = FastMCP(name)
     for tool in tools:
-        mcp.tool(name=tool.info.name, description=tool.info.description)(tool.func)
+        mcp.tool(name=tool.info.name, description=tool.info.description)(
+            _restore_positional_only(tool.func)
+        )
     return mcp
