@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from intpot.core.generators.api import APIGenerator
@@ -64,6 +65,34 @@ def test_a_body_that_never_returns_is_annotated_none():
     result = _to_api(tool, SourceType.CLI)
 
     assert result.return_type == "None"
+
+
+@pytest.mark.parametrize(
+    ("body", "return_type"),
+    [
+        ("if a:\n    return 1", "dict | None"),
+        ("if a:\n    return 1\nelse:\n    return 2", "dict"),
+        ("try:\n    return 1\nexcept ValueError:\n    pass", "dict | None"),
+        ("try:\n    return 1\nexcept ValueError:\n    return 2", "dict"),
+        ("for item in []:\n    return item", "dict | None"),
+        ("for item in []:\n    pass\nelse:\n    return 1", "dict"),
+        ("while True:\n    return 1", "dict"),
+        (
+            "with suppress(ValueError):\n    raise ValueError\nreturn 1",
+            "dict",
+        ),
+        (
+            "match a:\n    case True:\n        return 1\n    case _:\n        return 2",
+            "dict",
+        ),
+        ("match a:\n    case True:\n        return 1", "dict | None"),
+        ("return", "None"),
+    ],
+)
+def test_api_annotation_describes_reachable_return_shapes(body, return_type):
+    result = _to_api(_add_tool(body), SourceType.MCP)
+
+    assert result.return_type == return_type
 
 
 def test_returns_inside_a_nested_function_are_left_alone():

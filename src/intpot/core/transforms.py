@@ -51,10 +51,13 @@ def _target_return_type(tool: ToolInfo, source: SourceType, target: SourceType) 
         return "None"
     if target == SourceType.API:
         # FastAPI validates the response against this annotation, so it has to
-        # describe what the body actually returns. Every explicit return is
-        # wrapped into a dict above; a body with no return falls through to None.
-        if tool.function_body and not _has_top_level_return(tool.function_body):
+        # describe every reachable output. Explicit values are wrapped into a
+        # dict above; bare returns and normal fallthrough produce None.
+        outcomes = _return_outcomes(tool.function_body or "")
+        if "value" not in outcomes:
             return "None"
+        if outcomes & {"none", "fallthrough"}:
+            return "dict | None"
         return "dict"
     # MCP: preserve original if coming from MCP/API, use str from CLI
     if source == SourceType.CLI:
@@ -313,33 +316,114 @@ def _returns_to_echo(body: str) -> str:
     return ast.unparse(new_tree)
 
 
-class _TopLevelReturnVisitor(ast.NodeVisitor):
-    """Track whether a body returns at its own scope, ignoring nested defs."""
-
-    def __init__(self) -> None:
-        self.found = False
-        self._depth = 0
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._depth += 1
-        self.generic_visit(node)
-        self._depth -= 1
-
-    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
-
-    def visit_Return(self, node: ast.Return) -> None:
-        if self._depth == 0:
-            self.found = True
+_FALLTHROUGH = "fallthrough"
+_VALUE_RETURN = "value"
+_NONE_RETURN = "none"
+_TERMINATE = "terminate"
+_BREAK = "break"
 
 
-def _has_top_level_return(body: str) -> bool:
+def _then(
+    first: set[str],
+    second: set[str],
+) -> set[str]:
+    """Compose control-flow outcomes for two consecutive suites."""
+    outcomes = first - {_FALLTHROUGH}
+    if _FALLTHROUGH in first:
+        outcomes.update(second)
+    return outcomes
+
+
+def _suite_outcomes(statements: list[ast.stmt]) -> set[str]:
+    outcomes = {_FALLTHROUGH}
+    for statement in statements:
+        outcomes = _then(outcomes, _statement_outcomes(statement))
+    return outcomes
+
+
+def _statement_outcomes(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, ast.Return):
+        return {_NONE_RETURN if statement.value is None else _VALUE_RETURN}
+    if isinstance(statement, ast.Raise):
+        return {_TERMINATE}
+    if isinstance(statement, ast.Break):
+        return {_BREAK}
+    if isinstance(statement, ast.If):
+        otherwise = (
+            _suite_outcomes(statement.orelse) if statement.orelse else {_FALLTHROUGH}
+        )
+        return _suite_outcomes(statement.body) | otherwise
+    if isinstance(statement, ast.Match):
+        outcomes: set[str] = set()
+        exhaustive = False
+        for case in statement.cases:
+            outcomes.update(_suite_outcomes(case.body))
+            if (
+                case.guard is None
+                and isinstance(case.pattern, ast.MatchAs)
+                and case.pattern.pattern is None
+            ):
+                # Both ``case _:`` and an unguarded capture pattern match every
+                # remaining value, so control cannot miss every case.
+                exhaustive = True
+        if not exhaustive:
+            outcomes.add(_FALLTHROUGH)
+        return outcomes
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        body = _suite_outcomes(statement.body)
+        outcomes = body - {_FALLTHROUGH, _BREAK}
+
+        # A break skips the else suite and continues after the loop.
+        if _BREAK in body:
+            outcomes.add(_FALLTHROUGH)
+
+        # For-loops may be empty, and non-constant while conditions may be false.
+        # Normal exhaustion runs the else suite before continuing. A literal
+        # ``while True`` has no normal-exhaustion path.
+        is_infinite_while = (
+            isinstance(statement, ast.While)
+            and isinstance(statement.test, ast.Constant)
+            and statement.test.value is True
+        )
+        if not is_infinite_while:
+            outcomes.update(
+                _suite_outcomes(statement.orelse)
+                if statement.orelse
+                else {_FALLTHROUGH}
+            )
+        return outcomes
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        outcomes = _suite_outcomes(statement.body)
+        if _TERMINATE in outcomes:
+            # A context manager may suppress an exception raised by its body,
+            # in which case execution continues after the with statement.
+            outcomes.add(_FALLTHROUGH)
+        return outcomes
+    if isinstance(statement, (ast.Try, ast.TryStar)):
+        normal = _suite_outcomes(statement.body)
+        if statement.orelse:
+            normal = _then(normal, _suite_outcomes(statement.orelse))
+        outcomes = normal
+        for handler in statement.handlers:
+            outcomes |= _suite_outcomes(handler.body)
+        if statement.finalbody:
+            final = _suite_outcomes(statement.finalbody)
+            outcomes = (final - {_FALLTHROUGH}) | (
+                outcomes if _FALLTHROUGH in final else set()
+            )
+        return outcomes
+    # Nested definitions and ordinary statements complete normally. In
+    # particular, returns inside a nested function do not describe this body.
+    return {_FALLTHROUGH}
+
+
+def _return_outcomes(body: str) -> set[str]:
+    """Find reachable value, None, and fallthrough outcomes for a body."""
     try:
         tree = ast.parse(body)
     except SyntaxError:
-        return False
-    visitor = _TopLevelReturnVisitor()
-    visitor.visit(tree)
-    return visitor.found
+        return {_FALLTHROUGH}
+    return _suite_outcomes(tree.body)
 
 
 def _wrap_returns_in_dict(body: str) -> str:
