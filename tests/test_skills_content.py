@@ -18,6 +18,16 @@ def _all_skill_text() -> str:
     return cli_skill_body() + "\n" + python_skill_body()
 
 
+def _documented_fields(model_name: str) -> set[str]:
+    match = re.search(
+        rf"`{model_name}` fields:(.*?)(?:\.\s|\.\n)",
+        _all_skill_text(),
+        flags=re.DOTALL,
+    )
+    assert match, f"skills do not list {model_name} fields"
+    return set(re.findall(r"`(\w+)`", match.group(1)))
+
+
 def test_skills_cover_the_runtime_api():
     """The App runtime is the headline feature — it must not be missing again."""
     text = _all_skill_text()
@@ -96,6 +106,18 @@ def test_skills_only_reference_real_tool_fields():
 
     assert referenced, "expected the skills to show ToolInfo usage"
     assert referenced <= valid, f"not real ToolInfo fields: {referenced - valid}"
+
+
+def test_skills_list_every_tool_field():
+    expected = {f.name for f in dataclasses.fields(ToolInfo)}
+
+    assert _documented_fields("ToolInfo") == expected
+
+
+def test_skills_list_every_parameter_field_and_property():
+    expected = {f.name for f in dataclasses.fields(ParameterInfo)} | {"required"}
+
+    assert _documented_fields("ParameterInfo") == expected
 
 
 def test_skills_do_not_promise_the_old_network_default():

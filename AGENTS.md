@@ -8,7 +8,7 @@ Guidance for coding agents working **on intpot**. If you want intpot's skills fo
 Two halves that meet at one schema:
 
 - **Runtime** — `@app.tool()` registers a function; `App.serve()` builds a live Typer /
-  FastAPI / FastMCP instance, `App.eject()` writes standalone source.
+  FastAPI / FastMCP instance, `App.eject()` returns standalone source.
 - **Converter** — `intpot to cli|mcp|api` reads an existing Typer / FastMCP / FastAPI app
   and generates the equivalent in another framework.
 
@@ -51,7 +51,9 @@ was the bug. When you touch `templates/*.j2`, check the sibling templates.
 
 **`serve` and `eject` must expose the same interface.** They are the same app in two
 forms. They once disagreed about whether parameters came from the query string or the
-body. `tests/test_runtime_builders.py` asserts they match — keep that passing.
+body. `tests/test_runtime_builders.py` checks representative body-parameter parity, not
+every Python signature shape. Extend the parity cases whenever the signature contract
+changes rather than assuming that one case proves the whole interface.
 
 **Annotations must describe what the body actually returns.** FastAPI validates the
 response against the return annotation, so `-> dict` over a body returning an `int` is a
@@ -107,8 +109,8 @@ the contracts a change has to keep.
 **Templates**
 
 - The custom Jinja filters are `repr`, `pascal`, and `escape_doc`, registered in
-  `core/generators/_render.py`. A template that reaches for any other filter renders
-  blank.
+  `core/generators/_render.py`. An unknown filter raises `TemplateAssertionError` while
+  loading the template.
 - Path parameters in the API template must not get `= Path(...)`; FastAPI infers them
   from the route.
 - Generated code carries its own imports — review the import block, not just the body.
