@@ -482,7 +482,7 @@ intpot eject <source> --to <cli|mcp|api> [--output <path>]
 |----------------|-------------|
 | `source` | Path to a Python file containing an `intpot.App` |
 | `--to`, `-t` | Target framework: `cli`, `mcp`, `api` (required) |
-| `--output`, `-o` | Output file path (prints to stdout if omitted) |
+| `--output`, `-o` | Output file path (prints to stdout if omitted). Missing parent directories are created |
 
 ### `intpot init`
 
@@ -512,7 +512,7 @@ All three take the same arguments:
 | Argument/Option | Description |
 |----------------|-------------|
 | `source` | Path to a source Python file or directory |
-| `--output`, `-o` | Output file/directory path (prints to stdout if omitted) |
+| `--output`, `-o` | Output file/directory path (prints to stdout if omitted). Missing directories are created |
 | `--dry-run` | Print what would be generated, without writing any files |
 | `--verbose`, `-v` | Print detection details to stderr |
 
