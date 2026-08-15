@@ -21,6 +21,25 @@ def python_type_name(annotation: Any) -> str:
     return text
 
 
+def python_return_type_name(annotation: Any) -> str:
+    """Name a tool's return annotation, keeping "nothing" distinct from "unknown".
+
+    `python_type_name` answers both with "str". That is a fair default for an
+    unannotated *parameter* and wrong for a return type: FastAPI validates the
+    response against this annotation, so `-> str` over a function returning
+    `None` is a 500 on every call rather than a type-checker complaint.
+
+    - `-> None` becomes `"None"`, which FastAPI accepts.
+    - No annotation at all becomes `"Any"`, which tells FastAPI not to constrain
+      the response — the only honest answer when the source never said.
+    """
+    if annotation is inspect.Parameter.empty:
+        return "Any"
+    if annotation is None or annotation is type(None):
+        return "None"
+    return python_type_name(annotation)
+
+
 def extract_source_imports(fn: Any) -> list[str]:
     """Extract imports from the source file that are referenced in the function body.
 

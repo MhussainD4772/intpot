@@ -14,6 +14,14 @@ frameworks.
   `intpot inspect`
 - The user wants a new project skeleton — use `intpot init`
 
+Scaffold commands require a project name followed by `--type`:
+
+```bash
+intpot init my-project --type cli
+intpot init my-project --type mcp
+intpot init my-project --type api
+```
+
 ## Write once, serve everywhere
 
 Define tools with `@app.tool()` in a plain Python file:
@@ -66,7 +74,7 @@ intpot to api app.py               # CLI or MCP source -> FastAPI app
 
 intpot to cli server.py --output cli_app.py
 intpot to cli ./myproject/         # every app in a directory
-intpot to cli server.py --dry-run  # print output, write nothing
+intpot to cli server.py --dry-run  # print output; do not write generated files
 intpot to mcp app.py --verbose     # detection details on stderr
 ```
 
@@ -93,8 +101,9 @@ Prefer `--json` when you need to reason about the result programmatically.
 ## Things to know
 
 - **Detection imports the source file.** `intpot to ...` and `intpot inspect` execute the
-  module to find the app instance, so module-level code runs. Use `--dry-run` on
-  unfamiliar code.
+  module to find the app instance, so arbitrary module-level code still runs. `--dry-run`
+  only prevents generated output files from being written; it is not a sandbox. Only
+  convert source code you trust.
 - **`serve --api` binds `127.0.0.1`.** Pass `--host 0.0.0.0` to expose it on the network.
   Code from `eject --to api` and `init --type api` binds loopback too; change the `host=`
   argument in the generated file to opt in.
@@ -103,6 +112,24 @@ Prefer `--json` when you need to reason about the result programmatically.
 - **Converted code carries the original body over** where the frameworks agree, and
   rewrites it where they don't. A tool whose body can't be recovered gets a
   `# TODO: implement` stub.
+
+## Verify generated code
+
+Successful generation does not prove that the generated program works. After every
+conversion or eject:
+
+1. **Compile** it with `python -m py_compile generated.py`.
+2. **Import** the generated module in the environment where it will run.
+3. **Invoke** real behavior: run a generated CLI command, issue a request with FastAPI's
+   `TestClient`, or call a generated MCP tool. Checking text or `--help` alone is not a
+   behavioral test.
+
+Current unsupported or lossy cases include nested Typer sub-apps, some FastAPI
+`Annotated[..., Body(...)]` parameters, and `Depends()` (recorded in a comment but
+stripped from non-API targets). A missing recoverable body becomes a `# TODO: implement`
+stub. intpot carries source imports it can identify, but it does not discover or install
+transitive dependencies, reproduce configuration, or provision external services; verify
+those explicitly rather than assuming generated code is standalone.
 
 ## Installation
 
@@ -113,4 +140,6 @@ pip install intpot[api]       # + FastAPI support
 pip install intpot[all]       # everything
 ```
 
-Extras are only needed for frameworks you actually read or emit.
+Install `[mcp]` or `[api]` when intpot must inspect or load a source using that framework,
+or when you serve, import, or invoke that target. Emitting source text alone does not
+require the target extra, but verifying or running the emitted program does.

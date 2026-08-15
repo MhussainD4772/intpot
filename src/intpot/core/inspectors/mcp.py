@@ -9,6 +9,7 @@ from typing import Any
 from intpot.core.inspectors._utils import (
     extract_function_body,
     extract_source_imports,
+    python_return_type_name,
     python_type_name,
 )
 from intpot.core.inspectors.base import BaseInspector
@@ -83,7 +84,7 @@ class MCPInspector(BaseInspector):
                 )
 
             return_annotation = type_hints.get("return", sig.return_annotation)
-            return_type = python_type_name(return_annotation)
+            return_type = python_return_type_name(return_annotation)
 
             tools.append(
                 ToolInfo(

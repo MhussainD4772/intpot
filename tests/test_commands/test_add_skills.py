@@ -4,11 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+import yaml
 from typer.testing import CliRunner
 
 from intpot.cli import app
+from intpot.skills.content import cli_skill_body, python_skill_body
 
 runner = CliRunner()
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
+    """Parse a rule's YAML frontmatter with a real YAML parser."""
+    assert text.startswith("---\n")
+    header, separator, body = text[4:].partition("\n---\n")
+    assert separator, "frontmatter is not terminated"
+    parsed = yaml.safe_load(header)
+    assert isinstance(parsed, dict)
+    return parsed, body
 
 
 # ---------------------------------------------------------------------------
@@ -51,10 +64,11 @@ def test_add_skills_auto_detect_cursor(tmp_path: Path, monkeypatch):
 
     cli_path = tmp_path / ".cursor" / "rules" / "intpot-cli.mdc"
     assert cli_path.exists()
-    content = cli_path.read_text()
-    assert "---" in content  # frontmatter
-    assert "alwaysApply: false" in content
-    assert "globs:" in content
+    metadata, body = _parse_frontmatter(cli_path.read_text())
+    assert metadata["alwaysApply"] is False
+    assert "globs" not in metadata
+    assert "CLI" in str(metadata["description"])
+    assert body.strip().startswith("# intpot CLI")
 
 
 def test_add_skills_auto_detect_windsurf(tmp_path: Path, monkeypatch):
@@ -65,8 +79,13 @@ def test_add_skills_auto_detect_windsurf(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["add", "skills"])
     assert result.exit_code == 0
     assert "windsurf" in result.output
-    assert (tmp_path / ".windsurf" / "rules" / "intpot-cli.md").exists()
-    assert (tmp_path / ".windsurf" / "rules" / "intpot-python.md").exists()
+    for name, subject in (("intpot-cli", "CLI"), ("intpot-python", "Python")):
+        path = tmp_path / ".windsurf" / "rules" / f"{name}.md"
+        metadata, body = _parse_frontmatter(path.read_text())
+        assert metadata["trigger"] == "model_decision"
+        assert subject in str(metadata["description"])
+        assert len(str(metadata["description"])) > 60
+        assert body.strip().startswith(f"# intpot {subject}")
 
 
 def test_add_skills_auto_detect_copilot(tmp_path: Path, monkeypatch):
@@ -190,7 +209,8 @@ def test_add_skills_idempotent_copilot(tmp_path: Path, monkeypatch):
     assert "already installed" in result2.output
 
     content = (tmp_path / ".github" / "copilot-instructions.md").read_text()
-    assert content.count("<!-- intpot: intpot CLI -->") == 1
+    assert content.count("<!-- intpot:managed:start -->") == 1
+    assert content.count("<!-- intpot:managed:end -->") == 1
 
 
 def test_add_skills_idempotent_codex(tmp_path: Path, monkeypatch):
@@ -206,6 +226,185 @@ def test_add_skills_idempotent_codex(tmp_path: Path, monkeypatch):
 
     content = (tmp_path / "AGENTS.md").read_text()
     assert content.count("# intpot CLI") == 1
+    assert content.count("<!-- intpot:managed:start -->") == 1
+    assert content.count("<!-- intpot:managed:end -->") == 1
+
+
+@pytest.mark.parametrize(
+    ("agent", "relative_path"),
+    [
+        ("copilot", ".github/copilot-instructions.md"),
+        ("codex", "AGENTS.md"),
+    ],
+)
+def test_managed_instructions_are_updated_and_preserve_user_content(
+    tmp_path: Path, monkeypatch, agent: str, relative_path: str
+):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["add", "skills", "--agent", agent])
+    path = tmp_path / relative_path
+    installed = path.read_text()
+    stale = installed.replace("**intpot** does two things", "STALE CONTENT", 1)
+    path.write_text("USER BEFORE\n" + stale + "USER AFTER\n")
+
+    result = runner.invoke(app, ["add", "skills", "--agent", agent])
+
+    assert result.exit_code == 0
+    updated = path.read_text()
+    assert "STALE CONTENT" not in updated
+    assert updated.startswith("USER BEFORE\n")
+    assert updated.endswith("USER AFTER\n")
+    assert updated.count("<!-- intpot:managed:start -->") == 1
+    assert updated.count("<!-- intpot:managed:end -->") == 1
+
+
+@pytest.mark.parametrize(
+    ("agent", "relative_path", "legacy_marker"),
+    [
+        ("copilot", ".github/copilot-instructions.md", "<!-- intpot: intpot CLI -->"),
+        ("codex", "AGENTS.md", "# intpot CLI"),
+    ],
+)
+def test_partial_legacy_installation_is_repaired(
+    tmp_path: Path,
+    monkeypatch,
+    agent: str,
+    relative_path: str,
+    legacy_marker: str,
+):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"USER BEFORE\n{legacy_marker}\n")
+
+    result = runner.invoke(app, ["add", "skills", "--agent", agent])
+
+    assert result.exit_code == 0
+    repaired = path.read_text()
+    assert repaired.startswith("USER BEFORE\n")
+    assert repaired.count("# intpot CLI") == 1
+    assert "# intpot Python API" in repaired
+    assert repaired.count("<!-- intpot:managed:start -->") == 1
+    assert repaired.count("<!-- intpot:managed:end -->") == 1
+
+
+@pytest.mark.parametrize(
+    ("agent", "relative_path", "legacy_content"),
+    [
+        (
+            "copilot",
+            ".github/copilot-instructions.md",
+            "\n<!-- intpot: intpot CLI -->\n\n"
+            + cli_skill_body()
+            + "\n\n<!-- intpot: intpot Python API -->\n\n"
+            + python_skill_body()
+            + "\n",
+        ),
+        ("codex", "AGENTS.md", cli_skill_body() + "\n" + python_skill_body()),
+    ],
+)
+def test_complete_legacy_installation_is_migrated_without_deleting_following_section(
+    tmp_path: Path,
+    monkeypatch,
+    agent: str,
+    relative_path: str,
+    legacy_content: str,
+):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# USER BEFORE\n" + legacy_content + "\n# USER AFTER\nkeep me\n")
+
+    result = runner.invoke(app, ["add", "skills", "--agent", agent])
+
+    assert result.exit_code == 0
+    migrated = path.read_text()
+    assert migrated.startswith("# USER BEFORE\n")
+    assert migrated.endswith("# USER AFTER\nkeep me\n")
+    assert "<!-- intpot:managed:end -->\n# USER AFTER" in migrated
+    assert migrated.count("<!-- intpot:managed:start -->") == 1
+    assert migrated.count("<!-- intpot:managed:end -->") == 1
+
+
+@pytest.mark.parametrize(
+    ("agent", "relative_path", "legacy_marker"),
+    [
+        ("copilot", ".github/copilot-instructions.md", "<!-- intpot: intpot CLI -->"),
+        ("codex", "AGENTS.md", "# intpot CLI"),
+    ],
+)
+def test_ambiguous_legacy_installation_preserves_trailing_user_prose(
+    tmp_path: Path,
+    monkeypatch,
+    agent: str,
+    relative_path: str,
+    legacy_marker: str,
+):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = (
+        f"# USER BEFORE\n{legacy_marker}\nold cli\n"
+        "# intpot Python API\nold python\nUSER PROSE AFTER\nkeep me\n"
+    )
+    path.write_text(original)
+
+    result = runner.invoke(app, ["add", "skills", "--agent", agent])
+
+    assert result.exit_code == 0
+    repaired = path.read_text()
+    assert original in repaired
+    assert "USER PROSE AFTER\nkeep me" in repaired
+    assert repaired.count("<!-- intpot:managed:end -->") == 1
+
+    rerun = runner.invoke(app, ["add", "skills", "--agent", agent])
+    assert rerun.exit_code == 0
+    assert path.read_text().count("<!-- intpot:managed:end -->") == 1
+
+
+@pytest.mark.parametrize(
+    ("agent", "relative_path"),
+    [
+        ("copilot", ".github/copilot-instructions.md"),
+        ("codex", "AGENTS.md"),
+    ],
+)
+def test_unterminated_managed_block_preserves_all_existing_content(
+    tmp_path: Path, monkeypatch, agent: str, relative_path: str
+):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = (
+        "# USER BEFORE\n<!-- intpot:managed:start -->\n"
+        "incomplete intpot content\nUSER PROSE AFTER\nkeep me\n"
+    )
+    path.write_text(original)
+
+    result = runner.invoke(app, ["add", "skills", "--agent", agent])
+
+    assert result.exit_code == 0
+    repaired = path.read_text()
+    assert original in repaired
+    assert "USER PROSE AFTER\nkeep me" in repaired
+    assert repaired.count("<!-- intpot:managed:end -->") == 1
+
+    rerun = runner.invoke(app, ["add", "skills", "--agent", agent])
+    assert rerun.exit_code == 0
+    assert path.read_text().count("<!-- intpot:managed:end -->") == 1
+
+
+def test_codex_warns_when_agents_file_exceeds_default_32_kib(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("x" * (32 * 1024))
+
+    result = runner.invoke(app, ["add", "skills", "--agent", "codex"])
+
+    assert result.exit_code == 0
+    assert "32 KiB" in result.output
+    assert "Codex" in result.output
 
 
 def test_add_skills_invalid_path(tmp_path: Path):
@@ -273,17 +472,40 @@ def test_claude_skills_carry_discoverable_frontmatter(tmp_path: Path, monkeypatc
 
     for name in ("intpot-cli", "intpot-python"):
         text = (tmp_path / ".claude" / "skills" / name / "SKILL.md").read_text()
-        header, _, body = text.partition("\n---\n")
-        assert header.startswith("---\n"), f"{name} has no frontmatter block"
-        assert f"name: {name}" in header
+        metadata, body = _parse_frontmatter(text)
+        assert metadata["name"] == name
         # The description is what the model reads to decide relevance, so it has
         # to say what the skill is for, not just name it.
-        description = next(
-            line for line in header.splitlines() if line.startswith("description:")
-        )
+        description = str(metadata["description"])
         assert len(description) > 60, f"{name} description is too thin to match on"
         assert "intpot" in description
         assert body.strip().startswith("# intpot")
+
+
+@pytest.mark.parametrize(
+    "agent", ["claude", "cursor", "windsurf", "copilot", "cline", "codex"]
+)
+def test_every_agent_format_contains_both_complete_skills(
+    tmp_path: Path, monkeypatch, agent: str
+):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["add", "skills", "--agent", agent])
+    assert result.exit_code == 0
+
+    generated = "\n".join(
+        path.read_text() for path in tmp_path.rglob("*") if path.is_file()
+    )
+    for command in (
+        "intpot init",
+        "intpot inspect",
+        "intpot serve",
+        "intpot eject",
+        "intpot to cli",
+        "intpot to mcp",
+        "intpot to api",
+    ):
+        assert command in generated, f"{agent} output omits {command}"
+    assert "intpot.load" in generated
 
 
 # ---------------------------------------------------------------------------
