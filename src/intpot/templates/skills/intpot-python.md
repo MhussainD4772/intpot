@@ -35,9 +35,7 @@ def fetch_customer_record(account_id: str) -> dict:
     ...
 ```
 
-`async def` tools work in every mode. Variadic tool signatures using `*args` or `**kwargs`
-are rejected because they cannot expose one consistent CLI, API, and MCP interface; use
-explicit named parameters instead.
+`async def` tools work in every mode.
 
 ### Serving and exporting
 

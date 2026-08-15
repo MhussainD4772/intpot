@@ -26,14 +26,6 @@ def test_skills_cover_the_runtime_api():
         assert symbol in text, f"skills never mention {symbol}"
 
 
-def test_python_skill_warns_that_variadic_tools_are_rejected():
-    text = python_skill_body()
-
-    assert "*args" in text
-    assert "**kwargs" in text
-    assert "rejected" in text
-
-
 def test_skills_cover_the_conversion_api():
     text = _all_skill_text()
 
