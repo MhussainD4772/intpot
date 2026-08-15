@@ -26,6 +26,14 @@ def test_skills_cover_the_runtime_api():
         assert symbol in text, f"skills never mention {symbol}"
 
 
+def test_python_skill_warns_that_variadic_tools_are_rejected():
+    text = python_skill_body()
+
+    assert "*args" in text
+    assert "**kwargs" in text
+    assert "rejected" in text
+
+
 def test_skills_cover_the_conversion_api():
     text = _all_skill_text()
 
@@ -38,6 +46,41 @@ def test_skills_cover_every_cli_command():
 
     for command in ("intpot init", "intpot inspect", "intpot serve", "intpot eject"):
         assert command in text, f"skills never mention `{command}`"
+
+    for target in ("cli", "mcp", "api"):
+        assert f"intpot init my-project --type {target}" in text
+        assert f"intpot to {target}" in text
+
+
+def test_skills_explain_dry_run_does_not_sandbox_source_imports():
+    text = _all_skill_text()
+
+    assert "only prevents generated output files from being written" in text
+    assert "module-level code still runs" in text
+    assert "Use `--dry-run` on unfamiliar code" not in text
+
+
+def test_skills_require_generated_code_to_be_executed_not_just_read():
+    text = _all_skill_text()
+
+    for check in ("compile", "import", "invoke"):
+        assert check in text.lower()
+    assert "successful generation does not prove" in text.lower()
+
+
+def test_skills_state_current_conversion_limits_without_overpromising():
+    text = _all_skill_text()
+
+    for limitation in ("transitive dependencies", "Depends()", "nested Typer"):
+        assert limitation in text
+    assert "unsupported" in text.lower()
+
+
+def test_skills_explain_when_framework_extras_are_actually_needed():
+    text = " ".join(_all_skill_text().lower().split())
+
+    assert "emitting source text alone does not require" in text
+    assert "inspect or load a source" in text
 
 
 def test_skills_only_reference_real_parameter_fields():
