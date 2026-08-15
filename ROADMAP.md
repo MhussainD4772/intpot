@@ -25,7 +25,10 @@ than planned:
   `core/transforms.py`.
 - **Return-type coercion for FastAPI** — a scalar return is wrapped as
   `{"result": ...}` so the generated handler matches the response model FastAPI validates
-  against.
+  against. The annotation is derived from every reachable outcome of the body, not from
+  whether a `return` appears somewhere: a function that returns on one branch and falls
+  through on another is annotated `dict | None`, because FastAPI rejects the response
+  otherwise.
 - **Reading nested command hierarchies** — `app.add_typer(db, name="db")` is walked to any
   depth and each command extracted, named by its path: `db migrate` becomes `db_migrate`.
   Generating a nested hierarchy back out is still open (#2).
@@ -58,6 +61,9 @@ transformations that need real understanding of what a function body does.
 
 - Runtime interop / adapter layer (intpot is a code generator, not a runtime bridge)
 - Supporting frameworks beyond Typer, FastMCP, and FastAPI
+- **Variadic tool signatures.** `*args` and `**kwargs` have no representation that means
+  the same thing as a CLI argument, an HTTP request body, and an MCP tool schema, so
+  `@app.tool()` rejects them outright rather than guessing. Use explicit named parameters.
 
 ---
 
