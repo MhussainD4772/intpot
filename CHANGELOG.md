@@ -10,6 +10,34 @@ release assembles them here — run `make changelog-draft` to preview them.
 
 <!-- towncrier release notes start -->
 
+## [0.6.0] - 2026-08-15
+
+### Changed
+
+- **Breaking:** `@app.tool()` now rejects functions with `*args` or `**kwargs`, raising
+  `ValueError` when the tool is registered — which is import time for most apps. Variadic
+  parameters have no representation that means the same thing as a CLI argument, an HTTP
+  request body, and an MCP tool schema, so intpot refuses rather than guessing. Replace them
+  with explicit named parameters. In the same change, positional-only parameters and
+  ordinary parameters named `self` or `cls` are now preserved and called correctly in all
+  three modes, where before they raised `TypeError` or were silently dropped. ([#88](https://github.com/tugrulguner/intpot/pull/88))
+
+### Fixed
+
+- Tools that return nothing are no longer annotated as returning `str`. An ejected FastAPI
+  endpoint over a body returning `None` failed response validation on every call — a 500 —
+  and a tool with no return annotation did the same as soon as it returned a non-string.
+  `-> None` now stays `None`, and an unannotated return becomes `Any`. ([#83](https://github.com/tugrulguner/intpot/pull/83))
+- Converting a Typer command that prints more than once no longer loses output. Each
+  `typer.echo` became its own `return`, so an echo inside a loop returned on the first
+  iteration and a command that printed every item produced exactly one — silently. Bodies
+  with several echoes, or echoes inside control flow, now collect their output and return
+  all of it; a single trailing echo still returns its value directly. ([#84](https://github.com/tugrulguner/intpot/pull/84))
+- Agent guidance installed by `intpot add skills` now uses valid activation metadata and updates shared files without overwriting project content. ([#85](https://github.com/tugrulguner/intpot/pull/85))
+- Single-file conversions now report detection failures clearly and create missing output directories. ([#86](https://github.com/tugrulguner/intpot/pull/86))
+- FastAPI conversions now accept functions that return values on only some control-flow paths. ([#87](https://github.com/tugrulguner/intpot/pull/87))
+
+
 ## [0.5.1] - 2026-08-14
 
 ### Added
