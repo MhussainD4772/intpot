@@ -23,6 +23,10 @@ from intpot.skills.content import (
 # Per-agent writers
 # ---------------------------------------------------------------------------
 
+_MANAGED_START = "<!-- intpot:managed:start -->"
+_MANAGED_END = "<!-- intpot:managed:end -->"
+_CODEX_DEFAULT_MAX_BYTES = 32 * 1024
+
 _CLAUDE_SKILLS = (
     (
         "intpot-cli",
@@ -99,26 +103,26 @@ def _write_windsurf(root: Path) -> list[Path]:
 
 
 def _write_copilot(root: Path) -> list[Path]:
-    """Append intpot instructions to .github/copilot-instructions.md."""
+    """Install an updateable managed block in Copilot's instructions."""
     gh_dir = root / ".github"
     gh_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
 
     instructions_path = gh_dir / "copilot-instructions.md"
-    marker = "<!-- intpot: intpot CLI -->"
-
     existing = instructions_path.read_text() if instructions_path.exists() else ""
-
-    if marker in existing:
-        # Already installed — skip to avoid duplicates
-        return written
-
     combined = copilot_instruction(
         "intpot CLI", cli_skill_body()
     ) + copilot_instruction("intpot Python API", python_skill_body())
 
-    with instructions_path.open("a") as f:
-        f.write(combined)
+    updated = _upsert_managed_block(
+        existing,
+        combined,
+        legacy_start="<!-- intpot: intpot CLI -->",
+    )
+    if updated == existing:
+        return written
+
+    instructions_path.write_text(updated)
 
     written.append(instructions_path)
     return written
@@ -142,27 +146,82 @@ def _write_cline(root: Path) -> list[Path]:
 
 
 def _write_codex(root: Path) -> list[Path]:
-    """Append intpot instructions to AGENTS.md (OpenAI Codex CLI)."""
+    """Install an updateable managed block in AGENTS.md for Codex CLI."""
     written: list[Path] = []
     agents_path = root / "AGENTS.md"
-    marker = "# intpot CLI"
-
     existing = agents_path.read_text() if agents_path.exists() else ""
-
-    if marker in existing:
-        return written
-
     combined = (
         codex_instruction("intpot CLI", cli_skill_body())
         + "\n"
         + codex_instruction("intpot Python API", python_skill_body())
     )
 
-    with agents_path.open("a") as f:
-        f.write(combined)
+    updated = _upsert_managed_block(existing, combined, legacy_start="# intpot CLI")
+    if updated != existing:
+        agents_path.write_text(updated)
+        written.append(agents_path)
 
-    written.append(agents_path)
+    if len(updated.encode()) > _CODEX_DEFAULT_MAX_BYTES:
+        typer.echo(
+            "Warning: Codex AGENTS.md now exceeds the default 32 KiB instruction "
+            "limit; Codex may truncate instructions unless its limit is increased.",
+            err=True,
+        )
     return written
+
+
+def _upsert_managed_block(existing: str, content: str, *, legacy_start: str) -> str:
+    """Insert or replace intpot's bounded block while preserving user text.
+
+    Releases before managed blocks emitted only a start marker. For those files,
+    the second skill heading and the next top-level heading provide a conservative
+    boundary. A partial legacy install containing only its start marker replaces
+    only that line rather than consuming user content after it.
+    """
+    block = f"{_MANAGED_START}\n\n{content.strip()}\n\n{_MANAGED_END}"
+
+    search_from = 0
+    while (start := existing.find(_MANAGED_START, search_from)) >= 0:
+        next_start = existing.find(_MANAGED_START, start + len(_MANAGED_START))
+        end = existing.find(_MANAGED_END, start + len(_MANAGED_START))
+        if end >= 0 and (next_start < 0 or end < next_start):
+            end += len(_MANAGED_END)
+            return existing[:start] + block + existing[end:]
+        search_from = next_start if next_start >= 0 else len(existing)
+
+    if _MANAGED_START in existing:
+        # Without an end marker there is no safe way to distinguish stale
+        # generated text from user content. Preserve the file byte-for-byte and
+        # append a valid block that future runs can update.
+        return _append_managed_block(existing, block)
+
+    start = existing.find(legacy_start)
+    if start >= 0:
+        end = _legacy_section_end(existing, start)
+        if end is not None:
+            return existing[:start] + block + existing[end:]
+        return _append_managed_block(existing, block)
+
+    return _append_managed_block(existing, block)
+
+
+def _append_managed_block(existing: str, block: str) -> str:
+    """Append a managed block without changing any existing bytes."""
+    separator = "" if not existing or existing.endswith("\n\n") else "\n\n"
+    return existing + separator + block + "\n"
+
+
+def _legacy_section_end(text: str, start: int) -> int | None:
+    """Find a safe boundary for an old unbounded installation, if one exists."""
+    second_skill = text.find("# intpot Python API", start)
+    if second_skill < 0:
+        line_end = text.find("\n", start)
+        if line_end < 0 or not text[line_end:].strip():
+            return len(text)
+        return None
+
+    next_heading = text.find("\n# ", second_skill + len("# intpot Python API"))
+    return None if next_heading < 0 else next_heading
 
 
 _AGENT_WRITERS: dict[Agent, Callable[..., list[Path]]] = {
