@@ -74,6 +74,20 @@ def _fastapi_endpoint(func: Callable[..., Any], info: ToolInfo) -> Callable[...,
     variadic = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
 
     signature = inspect.signature(func)
+    positional_only = tuple(
+        param.name
+        for param in signature.parameters.values()
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY
+    )
+
+    def call_arguments(
+        kwargs: dict[str, Any],
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Restore the original callable's positional-only arguments."""
+        remaining = dict(kwargs)
+        args = tuple(remaining.pop(name) for name in positional_only)
+        return args, remaining
+
     parameters = []
     for param_name, param in signature.parameters.items():
         if param.kind in variadic:
@@ -101,14 +115,16 @@ def _fastapi_endpoint(func: Callable[..., Any], info: ToolInfo) -> Callable[...,
 
         @functools.wraps(func)
         async def _async_endpoint(**kwargs: Any) -> Any:
-            return await func(**kwargs)
+            args, remaining = call_arguments(kwargs)
+            return await func(*args, **remaining)
 
         endpoint = _async_endpoint
     else:
 
         @functools.wraps(func)
         def _sync_endpoint(**kwargs: Any) -> Any:
-            return func(**kwargs)
+            args, remaining = call_arguments(kwargs)
+            return func(*args, **remaining)
 
         endpoint = _sync_endpoint
 

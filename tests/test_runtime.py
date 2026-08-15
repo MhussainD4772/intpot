@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
 from intpot.runtime import App
@@ -36,6 +39,48 @@ def test_tool_with_defaults():
     assert tool.parameters[0].required  # name
     assert not tool.parameters[1].required  # greeting
     assert tool.parameters[1].default == "Hello"
+
+
+def _var_positional(*values: int) -> int:
+    return sum(values)
+
+
+def _var_keyword(**values: int) -> int:
+    return sum(values.values())
+
+
+@pytest.mark.parametrize("func", [_var_positional, _var_keyword])
+def test_tool_rejects_variadic_parameters(func: Callable[..., int]):
+    app = App("test")
+
+    with pytest.raises(
+        ValueError,
+        match=r"_var_.*variadic parameter.*values.*CLI, API, and MCP",
+    ):
+        app.tool()(func)
+
+    assert app.tools == []
+
+
+def test_ordinary_parameters_named_self_and_cls_are_preserved():
+    app = App("test")
+
+    @app.tool()
+    def identity(self: str, cls: str) -> str:
+        return f"{self}:{cls}"
+
+    assert [param.name for param in app.tools[0].parameters] == ["self", "cls"]
+
+    namespace: dict[str, Any] = {}
+    exec(compile(app.eject("api"), "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    response = TestClient(namespace["app"]).post(
+        "/identity", json={"self": "left", "cls": "right"}
+    )
+    assert response.status_code == 200
+    assert response.json() == "left:right"
 
 
 def test_tool_name_override():

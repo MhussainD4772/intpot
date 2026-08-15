@@ -207,7 +207,7 @@ app.write("output/api_app.py", "api")
 ```
 
 **`App`** (universal runtime):
-- `.tool(name=None, description=None)` — decorator to register functions as tools; both arguments override the defaults taken from the function name and docstring
+- `.tool(name=None, description=None)` — decorator to register functions as tools; both arguments override the defaults taken from the function name and docstring. Functions with `*args` or `**kwargs` are rejected because those parameters have no consistent CLI, HTTP API, and MCP representation.
 - `.serve(mode, host, port)` — serve as CLI, API, or MCP
 - `.eject(target)` — generate standalone framework code
 - `.tools` — list of normalized `ToolInfo` objects

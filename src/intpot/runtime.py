@@ -57,6 +57,10 @@ class App:
         Args:
             name: Override the tool name (defaults to function name).
             description: Override the tool description (defaults to docstring).
+
+        Raises:
+            ValueError: If the function has ``*args`` or ``**kwargs`` parameters,
+                which cannot be exposed consistently across all three modes.
         """
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -162,6 +166,16 @@ def _build_tool_info(
 
     # Extract parameters from signature + type hints
     sig = inspect.signature(func)
+    for param in sig.parameters.values():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            raise ValueError(
+                f"Tool {tool_name!r} has variadic parameter {param.name!r}; "
+                "variadic parameters cannot be exposed consistently across "
+                "CLI, API, and MCP modes"
+            )
     try:
         hints = _safe_get_type_hints(func)
     except Exception:
@@ -169,9 +183,6 @@ def _build_tool_info(
 
     parameters: list[ParameterInfo] = []
     for param_name, param in sig.parameters.items():
-        if param_name in ("self", "cls"):
-            continue
-
         # Type annotation
         if param_name in hints:
             type_str = python_type_name(hints[param_name])
