@@ -103,3 +103,124 @@ def test_api_target_does_not_change_other_targets():
     assert cli.return_type == "None"
     assert mcp.function_body == "return a + b"
     assert mcp.return_type == "int"
+
+
+# ---------------------------------------------------------------------------
+# typer.echo → return must preserve control flow
+#
+# Each echo used to become its own `return`, independently of where it sat.
+# One inside a loop returned on the first iteration, so a command that printed
+# every item produced exactly one — no error, just a quietly wrong answer.
+# ---------------------------------------------------------------------------
+
+
+def _listing_tool(body: str) -> ToolInfo:
+    return ToolInfo(
+        name="listing",
+        description="List things.",
+        parameters=[ParameterInfo(name="items", type_annotation="list")],
+        return_type="None",
+        function_body=body,
+    )
+
+
+def _run_as_mcp(tool: ToolInfo, *args: Any) -> Any:
+    """Convert to MCP, execute the generated module, call the tool."""
+    import asyncio
+
+    from intpot.core.generators.mcp import MCPGenerator
+
+    tools = transform_tools([tool], SourceType.CLI, SourceType.MCP)
+    namespace: dict[str, Any] = {}
+    exec(compile(MCPGenerator().generate(tools), "<generated>", "exec"), namespace)
+    registered = asyncio.run(namespace["mcp"].local_provider._list_tools())
+    return {t.name: t.fn for t in registered}["listing"](*args)
+
+
+def test_an_echo_in_a_loop_returns_every_line_not_the_first() -> None:
+    tool = _listing_tool("for item in items:\n    typer.echo(item)")
+
+    assert _run_as_mcp(tool, ["a", "b", "c"]) == "a\nb\nc"
+
+
+def test_work_after_an_echo_still_happens() -> None:
+    tool = _listing_tool("typer.echo('start')\ntotal = len(items)\ntyper.echo(total)")
+
+    assert _run_as_mcp(tool, ["a", "b"]) == "start\n2"
+
+
+def test_both_branches_of_a_conditional_are_captured() -> None:
+    tool = _listing_tool(
+        "if items:\n    typer.echo('some')\nelse:\n    typer.echo('none')"
+    )
+
+    assert _run_as_mcp(tool, []) == "none"
+    assert _run_as_mcp(tool, ["x"]) == "some"
+
+
+def test_a_bare_return_still_exits_early_and_returns_what_was_printed() -> None:
+    tool = _listing_tool(
+        "if not items:\n"
+        "    typer.echo('empty')\n"
+        "    return\n"
+        "for item in items:\n"
+        "    typer.echo(item)"
+    )
+
+    assert _run_as_mcp(tool, []) == "empty"
+    assert _run_as_mcp(tool, ["a", "b"]) == "a\nb"
+
+
+def test_a_single_trailing_echo_still_returns_its_value_directly() -> None:
+    """The common case keeps its clean shape — and its type.
+
+    Accumulating unconditionally would turn `add` into a function returning
+    "5" instead of 5.
+    """
+    tool = transform_tools(
+        [_add_tool("typer.echo(a + b)")], SourceType.CLI, SourceType.MCP
+    )[0]
+
+    assert tool.function_body == "return a + b"
+
+
+def test_returns_inside_a_nested_function_are_still_left_alone() -> None:
+    tool = _listing_tool(
+        "def helper():\n    return 1\ntyper.echo(helper())\ntyper.echo('done')"
+    )
+    transformed = transform_tools([tool], SourceType.CLI, SourceType.MCP)[0]
+
+    assert "def helper():\n    return 1" in (transformed.function_body or "")
+    assert _run_as_mcp(tool, []) == "1\ndone"
+
+
+def test_a_multi_echo_body_converted_to_api_serves_a_real_request() -> None:
+    tool = _listing_tool("for item in items:\n    typer.echo(item)")
+    tools = transform_tools([tool], SourceType.CLI, SourceType.API)
+    namespace: dict[str, Any] = {}
+    exec(compile(APIGenerator().generate(tools), "<generated>", "exec"), namespace)
+
+    response = TestClient(namespace["app"]).post("/listing", json=["a", "b"])
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"result": "a\nb"}
+
+
+def test_an_echo_inside_a_helper_does_not_survive_into_the_output() -> None:
+    """A leftover `typer.echo` is a NameError: nothing imports typer there.
+
+    Skipping nested scopes entirely to protect their `return` statements also
+    skipped their echoes. Appending from a nested scope needs no `nonlocal` —
+    the list is only mutated, never rebound.
+    """
+    tool = _listing_tool(
+        "def show(x):\n"
+        "    typer.echo(x)\n"
+        "for item in items:\n"
+        "    show(item)\n"
+        "typer.echo('done')"
+    )
+    transformed = transform_tools([tool], SourceType.CLI, SourceType.MCP)[0]
+
+    assert "typer.echo" not in (transformed.function_body or "")
+    assert _run_as_mcp(tool, ["a", "b"]) == "a\nb\ndone"

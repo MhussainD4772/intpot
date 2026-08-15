@@ -81,6 +81,32 @@ def _transform_body(body: str, source: SourceType, target: SourceType) -> str:
 # ---------------------------------------------------------------------------
 
 
+_ACCUMULATOR = "_intpot_output"
+
+
+def _echo_statements(tree: ast.AST) -> list[ast.Expr]:
+    """Every `typer.echo(...)` used as a statement, at any depth."""
+    checker = _TyperEchoToReturn()
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and checker._is_typer_echo(node.value)
+    ]
+
+
+def _returns_the_last_thing_it_prints(tree: ast.Module) -> bool:
+    """Whether turning `typer.echo` into `return` preserves what the body does.
+
+    Only when there is exactly one echo and it is the final top-level statement.
+    Anywhere else — inside a loop, a branch, or followed by more work — `return`
+    exits early and the rest never runs, which silently changes the answer.
+    """
+    echoes = _echo_statements(tree)
+    if len(echoes) != 1:
+        return False
+    return bool(tree.body) and tree.body[-1] is echoes[0]
+
+
 def _from_cli(body: str, target: SourceType) -> str:
     """Transform CLI body: typer.echo(X) → return X (MCP/API)."""
     try:
@@ -88,8 +114,11 @@ def _from_cli(body: str, target: SourceType) -> str:
     except SyntaxError:
         return body
 
-    transformer = _TyperEchoToReturn()
-    new_tree = transformer.visit(tree)
+    if _echo_statements(tree) and not _returns_the_last_thing_it_prints(tree):
+        new_tree = _accumulate_echoes(tree)
+    else:
+        transformer = _TyperEchoToReturn()
+        new_tree = transformer.visit(tree)
     ast.fix_missing_locations(new_tree)
 
     # Also remove typer.Exit raises → convert to return/raise
@@ -98,6 +127,70 @@ def _from_cli(body: str, target: SourceType) -> str:
     ast.fix_missing_locations(new_tree)
 
     return ast.unparse(new_tree)
+
+
+class _EchoToAccumulator(ast.NodeTransformer):
+    """Replace typer.echo(X) with an append, and bare `return` with the join.
+
+    A bare `return` in a CLI command means "stop here"; the output produced so
+    far still has to come back, so it becomes the joined accumulator.
+    """
+
+    def __init__(self) -> None:
+        self._checker = _TyperEchoToReturn()
+        self._depth = 0
+
+    def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        if not self._checker._is_typer_echo(node.value):
+            return node
+        call = node.value
+        assert isinstance(call, ast.Call)
+        value = call.args[0] if call.args else ast.Constant(value="")
+        appended = ast.parse(f"{_ACCUMULATOR}.append(None)").body[0]
+        assert isinstance(appended, ast.Expr)
+        assert isinstance(appended.value, ast.Call)
+        appended.value.args = [value]
+        return appended
+
+    def visit_Return(self, node: ast.Return) -> ast.AST:
+        # Only the converted function's own returns mean "hand back the output".
+        # A nested function's return belongs to that function.
+        if self._depth > 0 or node.value is not None:
+            return node
+        return _join_accumulator()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        # Descend anyway: an echo in a helper still has to stop being an echo,
+        # or it survives into a module that never imports typer. Appending from
+        # a nested scope needs no `nonlocal` — the list is only mutated.
+        self._depth += 1
+        self.generic_visit(node)
+        self._depth -= 1
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+
+def _join_accumulator() -> ast.stmt:
+    return ast.parse(f"return '\\n'.join(str(_item) for _item in {_ACCUMULATOR})").body[
+        0
+    ]
+
+
+def _accumulate_echoes(tree: ast.Module) -> ast.Module:
+    """Collect everything the body prints and return it, in order.
+
+    Rewriting each `typer.echo` into `return` independently was wrong the moment
+    there was more than one of them: an echo inside a loop returned on the first
+    iteration, so `for item in items: typer.echo(item)` yielded one item instead
+    of all of them, with no error.
+    """
+    transformed = _EchoToAccumulator().visit(tree)
+    prelude = ast.parse(f"{_ACCUMULATOR} = []").body[0]
+    body = [prelude, *transformed.body]
+    if not isinstance(body[-1], ast.Return):
+        body.append(_join_accumulator())
+    return ast.Module(body=body, type_ignores=[])
 
 
 class _TyperEchoToReturn(ast.NodeTransformer):
