@@ -204,3 +204,23 @@ def test_a_multi_echo_body_converted_to_api_serves_a_real_request() -> None:
 
     assert response.status_code == 200, response.text
     assert response.json() == {"result": "a\nb"}
+
+
+def test_an_echo_inside_a_helper_does_not_survive_into_the_output() -> None:
+    """A leftover `typer.echo` is a NameError: nothing imports typer there.
+
+    Skipping nested scopes entirely to protect their `return` statements also
+    skipped their echoes. Appending from a nested scope needs no `nonlocal` —
+    the list is only mutated, never rebound.
+    """
+    tool = _listing_tool(
+        "def show(x):\n"
+        "    typer.echo(x)\n"
+        "for item in items:\n"
+        "    show(item)\n"
+        "typer.echo('done')"
+    )
+    transformed = transform_tools([tool], SourceType.CLI, SourceType.MCP)[0]
+
+    assert "typer.echo" not in (transformed.function_body or "")
+    assert _run_as_mcp(tool, ["a", "b"]) == "a\nb\ndone"

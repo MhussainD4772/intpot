@@ -138,6 +138,7 @@ class _EchoToAccumulator(ast.NodeTransformer):
 
     def __init__(self) -> None:
         self._checker = _TyperEchoToReturn()
+        self._depth = 0
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
         if not self._checker._is_typer_echo(node.value):
@@ -152,16 +153,22 @@ class _EchoToAccumulator(ast.NodeTransformer):
         return appended
 
     def visit_Return(self, node: ast.Return) -> ast.AST:
-        if node.value is not None:
+        # Only the converted function's own returns mean "hand back the output".
+        # A nested function's return belongs to that function.
+        if self._depth > 0 or node.value is not None:
             return node
         return _join_accumulator()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
-        # A nested function has its own return semantics — leave it alone.
+        # Descend anyway: an echo in a helper still has to stop being an echo,
+        # or it survives into a module that never imports typer. Appending from
+        # a nested scope needs no `nonlocal` — the list is only mutated.
+        self._depth += 1
+        self.generic_visit(node)
+        self._depth -= 1
         return node
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
-        return node
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
 
 
 def _join_accumulator() -> ast.stmt:
