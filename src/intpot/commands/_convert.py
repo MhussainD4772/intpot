@@ -79,12 +79,16 @@ def convert(
                 typer.echo(code)
         return
 
-    from intpot.core.detector import detect_source
+    from intpot.core.detector import DetectionError, detect_source
 
     if verbose:
         print(f"Detecting: {source}", file=sys.stderr)
 
-    source_type, app_instance = detect_source(source)
+    try:
+        source_type, app_instance = detect_source(source)
+    except DetectionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
     if verbose:
         print(f"FOUND: {source} ({source_type.value})", file=sys.stderr)
@@ -102,6 +106,7 @@ def convert(
         typer.echo(f"# --- Would generate: {out_path} ---")
         typer.echo(code)
     elif output:
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(code)
         typer.echo(f"Generated {label}: {output}")
     else:
