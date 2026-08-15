@@ -118,10 +118,11 @@ the contracts a change has to keep.
 - The AST pass maps `typer.echo` ↔ `return` and `typer.Exit` ↔ `raise`. A new transform
   that breaks either direction breaks round-tripping.
 - `_target_return_type` decides the annotation. CLI is always `None`.
-- API is `dict` when the body returns something — a scalar return gets wrapped as
-  `{"result": ...}` — and `None` when the body has no top-level return. Neither is
-  unconditional. Treating `dict` as unconditional is what made every generated FastAPI
-  handler 500 before #56.
+- API annotations must describe every reachable path. Scalar returns are wrapped as
+  `{"result": ...}`, but the presence of one `return` does not prove that a conditional
+  body cannot fall through to `None`. Treating `dict` as unconditional is what made every
+  generated FastAPI handler 500 before #56; ignoring fallthrough creates the same failure
+  on only some requests.
 - MCP keeps the source annotation, except from CLI, where it becomes `str`.
 
 **Errors**

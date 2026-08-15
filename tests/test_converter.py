@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
 import intpot
 from intpot.converter import IntpotApp
@@ -108,6 +109,32 @@ def test_to_api_from_cli():
     code = intpot.load(cli).to_api()
     assert "from fastapi import FastAPI" in code
     assert "hello" in code
+
+
+def test_to_api_accepts_a_source_returning_only_on_one_branch(tmp_source):
+    source = tmp_source("""
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+
+        @mcp.tool()
+        def maybe_result(enabled: bool) -> int:
+            if enabled:
+                return 1
+    """)
+
+    code = intpot.load(source).to_api()
+    namespace: dict[str, object] = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    client = TestClient(namespace["app"])  # type: ignore[arg-type]
+
+    returned = client.post("/maybe_result", json=True)
+    fell_through = client.post("/maybe_result", json=False)
+
+    assert returned.status_code == 200
+    assert returned.json() == {"result": 1}
+    assert fell_through.status_code == 200
+    assert fell_through.json() is None
 
 
 def test_same_type_raises():
