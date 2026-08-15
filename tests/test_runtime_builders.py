@@ -162,6 +162,44 @@ def test_fastapi_endpoint_calls_async_positional_only_parameters_positionally():
     assert response.json() == "hello world"
 
 
+def test_typer_command_calls_positional_only_parameters_positionally():
+    from intpot.runtime_builders import build_typer_app
+
+    app = App("positional-only")
+
+    @app.tool()
+    def greet(name: str, greeting: str = "Hello", /) -> str:
+        return f"{greeting}, {name}!"
+
+    result = CliRunner().invoke(
+        build_typer_app("test", app._tools),
+        ["Ada", "--greeting", "Welcome"],
+    )
+
+    assert result.exit_code == 0, result.exception
+    assert result.stdout == "Welcome, Ada!\n"
+
+
+def test_fastmcp_tool_calls_positional_only_parameters_positionally():
+    import asyncio
+
+    from intpot.runtime_builders import build_fastmcp_app
+
+    app = App("positional-only")
+
+    @app.tool()
+    def greet(name: str, greeting: str = "Hello", /) -> str:
+        return f"{greeting}, {name}!"
+
+    mcp_app: Any = build_fastmcp_app("test", app._tools)
+    result = asyncio.run(
+        mcp_app.call_tool("greet", {"name": "Ada", "greeting": "Welcome"})
+    )
+
+    assert result.is_error is False
+    assert result.structured_content == {"result": "Welcome, Ada!"}
+
+
 def test_fastapi_endpoint_calls_bound_instance_method_with_positional_default():
     from fastapi.testclient import TestClient
 
