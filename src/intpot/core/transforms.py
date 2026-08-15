@@ -227,6 +227,7 @@ _FALLTHROUGH = "fallthrough"
 _VALUE_RETURN = "value"
 _NONE_RETURN = "none"
 _TERMINATE = "terminate"
+_BREAK = "break"
 
 
 def _then(
@@ -252,6 +253,8 @@ def _statement_outcomes(statement: ast.stmt) -> set[str]:
         return {_NONE_RETURN if statement.value is None else _VALUE_RETURN}
     if isinstance(statement, ast.Raise):
         return {_TERMINATE}
+    if isinstance(statement, ast.Break):
+        return {_BREAK}
     if isinstance(statement, ast.If):
         otherwise = (
             _suite_outcomes(statement.orelse) if statement.orelse else {_FALLTHROUGH}
@@ -274,11 +277,27 @@ def _statement_outcomes(statement: ast.stmt) -> set[str]:
             outcomes.add(_FALLTHROUGH)
         return outcomes
     if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
-        # A loop may execute zero times (or break), so it can always continue
-        # after any returns reachable from its body.
-        outcomes = _suite_outcomes(statement.body) | {_FALLTHROUGH}
-        if statement.orelse:
-            outcomes.update(_suite_outcomes(statement.orelse))
+        body = _suite_outcomes(statement.body)
+        outcomes = body - {_FALLTHROUGH, _BREAK}
+
+        # A break skips the else suite and continues after the loop.
+        if _BREAK in body:
+            outcomes.add(_FALLTHROUGH)
+
+        # For-loops may be empty, and non-constant while conditions may be false.
+        # Normal exhaustion runs the else suite before continuing. A literal
+        # ``while True`` has no normal-exhaustion path.
+        is_infinite_while = (
+            isinstance(statement, ast.While)
+            and isinstance(statement.test, ast.Constant)
+            and statement.test.value is True
+        )
+        if not is_infinite_while:
+            outcomes.update(
+                _suite_outcomes(statement.orelse)
+                if statement.orelse
+                else {_FALLTHROUGH}
+            )
         return outcomes
     if isinstance(statement, (ast.With, ast.AsyncWith)):
         outcomes = _suite_outcomes(statement.body)

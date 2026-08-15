@@ -75,6 +75,8 @@ def test_a_body_that_never_returns_is_annotated_none():
         ("try:\n    return 1\nexcept ValueError:\n    pass", "dict | None"),
         ("try:\n    return 1\nexcept ValueError:\n    return 2", "dict"),
         ("for item in []:\n    return item", "dict | None"),
+        ("for item in []:\n    pass\nelse:\n    return 1", "dict"),
+        ("while True:\n    return 1", "dict"),
         (
             "with suppress(ValueError):\n    raise ValueError\nreturn 1",
             "dict",
